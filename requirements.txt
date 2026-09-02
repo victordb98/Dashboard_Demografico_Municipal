@@ -1,0 +1,17 @@
+streamlit>=1.50
+pandas>=2.2
+plotly>=5.22
+openpyxl>=3.1
+pyarrow>=16.0
+# --- mapas ---
+# Las usa preprocessGrids.py para generar data_cache/*.parquet y app.py para
+# leerlos. Sin ellas el dashboard funciona, pero el bloque del mapa avisa.
+geopandas>=1.0
+pyogrio>=0.9
+shapely>=2.0
+pyproj>=3.6
+# --- pantallas siguientes (comarcas y clustering) ---
+# scikit-learn>=1.5
+# libpysal>=4.11
+# esda>=2.6
+# spopt>=0.6

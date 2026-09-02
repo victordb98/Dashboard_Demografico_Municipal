@@ -1,0 +1,15 @@
+# Tema oscuro alineado con la paleta de app.py (§2).
+[theme]
+base = "dark"
+backgroundColor = "#0d0d0d"
+secondaryBackgroundColor = "#1a1a19"
+textColor = "#e8e7e0"
+primaryColor = "#3987e5"
+font = "sans serif"
+
+[server]
+# El Excel es grande; evitamos que Streamlit lo vigile y recargue la app.
+fileWatcherType = "auto"
+
+[browser]
+gatherUsageStats = false

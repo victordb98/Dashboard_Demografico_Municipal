@@ -1,0 +1,24 @@
+# Lo que NO se sube. Todo lo de aquí es material de origen o regenerable: el
+# dashboard en el servidor no lo necesita para arrancar.
+
+# --- Geometría a resolución completa --------------------------------------
+# 68 MB del IGN. Es la fuente de la que preprocessGrids.py saca todo lo demás,
+# pero la app lee municipios_ligero.parquet (14 MB), que sí se sube.
+data_cache/municipios.parquet
+
+# --- Descargas y ficheros de origen ---------------------------------------
+# La rejilla de 1 km y los límites municipales originales, ya destilados en
+# data_cache. Casi 1 GB entre todos.
+30824/
+30824.zip
+30824new.csv
+lineas_limite/
+renta_municipios.csv
+
+# --- Temporales ------------------------------------------------------------
+~$*.xlsx
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.DS_Store
