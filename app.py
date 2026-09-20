@@ -6,8 +6,8 @@ Dashboard Demográfico — Municipios y Comarcas de España
 Pantallas previstas:
   1. Ficha Municipal          <-- IMPLEMENTADA
   2. Mercado laboral
-  3. Mapas (municipios / comarcas / rejilla 1 km)
-  4. Clusters
+  3. Mapas (municipios / comarcas / rejilla 1 km)   <-- IMPLEMENTADA
+  4. Clustering                                     <-- IMPLEMENTADA
 
 Ejecutar con:
     streamlit run app.py
@@ -20,7 +20,8 @@ Estructura del fichero (mantener este orden al ir añadiendo cosas):
     §5  Componentes visuales (KPIs, gráficos)
     §6  Pantalla: Ficha Municipal
     §7  Pantalla: Mapas
-    §8  Main
+    §8  Pantalla: Clustering
+    §9  Main
 """
 
 from __future__ import annotations
@@ -293,6 +294,13 @@ GEOJSON_CANARIAS = CACHE_DIR / "municipios_canarias.geojson"
 # retícula municipal. Van como listas de coordenadas y no como GeoJSON porque
 # es lo que consume una traza de líneas y pesa una fracción.
 LINEAS_PROVINCIALES = CACHE_DIR / "provincias_lineas.json"
+
+# --- Clustering ------------------------------------------------------------
+# Los tres los deja clustering.py. El dashboard no los genera ni los rehace:
+# ver la cabecera de la seccion 8.
+CLUSTER_VARIABLES = CACHE_DIR / "clustering_municipios.parquet"
+CLUSTER_GRUPOS = CACHE_DIR / "clustering_grupos.parquet"
+CLUSTER_META = CACHE_DIR / "clustering_meta.json"
 # Trazo del límite provincial. Oscuro y no blanco: la mayoría de los colores de
 # las capas son de tono medio o claro, así que una línea oscura se lee sobre
 # ellos, y en la costa se funde con el fondo, que es justo lo deseable porque
@@ -424,7 +432,7 @@ CENTRO_PENINSULA = dict(lon=-2.487, lat=39.660)
 ZOOM_PENINSULA = 3.038
 
 # Pantallas del dashboard.
-PANTALLAS = ["Ficha municipal", "Mapas"]
+PANTALLAS = ["Ficha municipal", "Mapas", "Clustering"]
 
 # Municipio preseleccionado al arrancar la app.
 MUNICIPIO_INICIAL = "Madrid"
@@ -2350,7 +2358,690 @@ def pantalla_mapas(muni: pd.DataFrame, renta_serie: pd.Series,
 
 
 # ==========================================================================
-# §8  MAIN
+# §8  PANTALLA: CLUSTERING
+#
+# Las «Siete Españas municipales»: los 7.502 municipios con datos completos
+# agrupados por parecido demográfico, en formato dashboard.
+#
+# Esta pantalla NO agrupa nada, y es importante que siga siendo así. El árbol
+# lo corta clustering.py, que deja las etiquetas en clustering_grupos.parquet
+# y la ficha del análisis en clustering_meta.json; aquí solo se leen. Tiene
+# que ser de esta forma por dos motivos: cortar el árbol exige la matriz de
+# disimilitud y scipy -que no está en requirements.txt porque es dependencia
+# de aquel script y no del servidor-, y porque recalcularlo abriría la puerta
+# a que el dashboard y el informe publicado mostraran agrupaciones distintas.
+#
+# De los ficheros solo salen las etiquetas y los nombres. Los perfiles
+# -medias por grupo y puntuaciones z- se calculan aquí con un groupby sobre
+# 7.502 filas, que es instantáneo y garantiza que las cifras cuadran con la
+# tabla de variables que se esté leyendo.
+# ==========================================================================
+
+# Un color por grupo, en orden, y son los que pidió Víctor por su nombre:
+# azul, marrón, verde oscuro, verde claro, rojo, gris claro y naranja. Lo que
+# sí se calculó es el tono exacto de cada uno: dentro de cada color se buscó
+# la claridad y la saturación que más separan los 21 pares posibles -todos
+# los pares y no solo los contiguos, porque en un mapa cualquier grupo puede
+# acabar tocando a cualquier otro-, exigiendo contraste mínimo de 3:1 contra
+# la superficie de las tarjetas.
+#
+# El peor par a simple vista separa ΔE 17,7, por encima del suelo de 15: a
+# vista normal los siete se distinguen sin esfuerzo, que era el encargo.
+#
+# ATENCIÓN, y es el precio de esta combinación concreta: marrón, verde
+# oscuro, verde claro, rojo y naranja caen todos en el eje rojo-verde, así
+# que con protanopia o deuteranopia el peor par baja a ΔE 5,1 -el suelo son
+# 6- y esos cinco se acercan mucho entre sí. Por eso el color NUNCA va solo
+# en esta pantalla: el globo del mapa dice el nombre del grupo, la banda de
+# reparto lleva leyenda escrita, la ficha lleva número y nombre, y la casilla
+# de aislar permite mirar un grupo cada vez. Si algún día hiciera falta una
+# paleta accesible, hay que soltar alguno de los cinco tonos cálidos.
+COLORES_CLUSTER = [
+    "#2F80ED",   # 1  azul
+    "#86684D",   # 2  marrón
+    "#009A4D",   # 3  verde oscuro
+    "#74D45E",   # 4  verde claro
+    "#E03024",   # 5  rojo
+    "#CFCFC9",   # 6  gris claro
+    "#F59320",   # 7  naranja
+]
+
+# Gris al que se apagan los demás grupos cuando se aísla uno en el mapa.
+# Es mucho más oscuro que el gris claro del grupo 6 y que el de los
+# municipios sin dato, así que los tres grises no se confunden.
+COLOR_GRUPO_APAGADO = "#2f2f2c"
+
+ENTRADILLA_CLUSTER = (
+    "Los 7.502 municipios españoles con datos completos, agrupados por su "
+    "parecido demográfico. No se ha usado la provincia ni la comunidad "
+    "autónoma en el cálculo: los grupos salen solo de cómo se parecen entre "
+    "sí, y aun así reconstruyen el mapa."
+)
+
+# La lectura de cada grupo: lo que no se deduce de las cifras y hay que haber
+# mirado. Van escritas a mano y por eso viven aquí y no en el parquet.
+LECTURA_GRUPO = {
+    1: "Concentra la cualificación y la renta del país, y sobre todo "
+       "concentra **ciudades**: de dieciséis grandes capitales comprobadas, "
+       "quince caen aquí, incluidas Sevilla, Málaga y Badajoz. No es un grupo "
+       "del norte, aunque casi todos los municipios de Gipuzkoa y Bizkaia "
+       "estén dentro.",
+    2: "El extremo demográfico: uno de cada tres habitantes pasa de 67 años y "
+       "solo uno de cada dieciséis no llega a 18. Con 0,6 hijos por mujer, no "
+       "hay reemplazo posible. Es la meseta norte.",
+    3: "El grupo más pequeño y uno de los más definidos: paro bajo, empleo "
+       "alto y renta por encima de la media, con muchos casados y pocos "
+       "solteros. Seis de cada diez están en la cuenca del Ebro —regadío y "
+       "somontano—, con Lleida, Zaragoza y Huesca a la cabeza.",
+    4: "También envejecido, pero activo: la diferencia con el grupo 2 es que "
+       "aquí se sigue trabajando la tierra por cuenta propia, con la tasa de "
+       "empleo más alta del conjunto.",
+    5: "La combinación más dura: el paro más alto, la renta más baja y el "
+       "nivel de estudios más bajo, sobre una base agraria. Casi toda la "
+       "Extremadura y la Andalucía del interior.",
+    6: "El grupo menos característico: ninguna variable se aparta una "
+       "desviación de la media. Funciona como el resto por defecto, con un "
+       "sesgo hacia la industria y poca gente por cuenta propia.",
+    7: "El más joven y el más diverso: un 20 % nacido en el extranjero y la "
+       "tasa de divorcio más alta, con empleo bajo y casi nadie por cuenta "
+       "propia. Nueve de cada diez municipios canarios están aquí, y el "
+       "Mediterráneo entero —pero también Sabadell, Terrassa y 53 municipios "
+       "de Madrid: un 29 % del grupo no está en provincia con costa.",
+}
+
+CAUTELAS_CLUSTER = [
+    ("El nombre describe a la mayoría, no a cada municipio",
+     "Los nombres se han leído del perfil estadístico de cada grupo, y por eso "
+     "hay miembros que los contradicen: Sevilla y Badajoz están en el grupo "
+     "urbano de renta alta, no en el del sur agrario; y el grupo 7 se llama "
+     "urbano, pero se lleva nueve de cada diez municipios canarios y buena "
+     "parte del Mediterráneo, muchos de ellos pequeños. Lo que une a cada "
+     "grupo son las variables, no la geografía, que aparece después como "
+     "consecuencia."),
+    ("La media no es la cifra nacional",
+     "Cada municipio cuenta como una observación, así que Villarejo pesa lo "
+     "mismo que Madrid. Por eso la media municipal de menores de 18 años es "
+     "del 12 % y la de España, muy superior: hay miles de municipios "
+     "diminutos y envejecidos que tiran de ella hacia abajo."),
+    ("El grupo 6 no es un tipo, es el resto",
+     "Ninguna de sus variables se aparta una desviación típica de la media. "
+     "Agrupa a los municipios que no encajan claramente en ningún otro "
+     "perfil, y conviene leerlo así y no como una categoría con personalidad "
+     "propia."),
+    ("La tasa de actividad está calculada pero no usada",
+     "Se excluyó del cálculo de distancias porque es casi una combinación de "
+     "las otras dos tasas: activos son ocupados más parados. Incluirla haría "
+     "que el mercado laboral pesara tres veces en la distancia mientras el "
+     "estado civil pesa una. Aparece en la tabla como referencia."),
+    ("La numeración de los grupos no es estable",
+     "Los números del 1 al 7 los asigna el algoritmo al cortar el árbol. Si "
+     "cambian los datos, las variables o el número de grupos, se reordenan y "
+     "los nombres dejarían de corresponder. Los nombres son la etiqueta "
+     "fiable; el número, no."),
+]
+
+FUENTES_CLUSTER = (
+    "Fuentes: Censo de Población y Viviendas y Atlas de Distribución de Renta "
+    "de los Hogares (INE). Población 2025, renta 2023, relación con la "
+    "actividad 2024."
+)
+
+# Escala divergente de la matriz. El punto medio es la superficie de la
+# tarjeta y no un gris: así una variable que está en la media no pinta nada y
+# la tabla solo destaca lo que se aparta, que es lo que hay que leer.
+ESCALA_DESVIACION = [
+    [0.00, "#1B6FD0"],
+    [0.28, "#1B4E7F"],
+    [0.50, C["surface"]],
+    [0.72, "#96382F"],
+    [1.00, "#D4483A"],
+]
+# Recorte de la escala. Ninguna media de grupo llega a 1,4 desviaciones, así
+# que fijarlo aquí -y no en el máximo observado- mantiene el mismo criterio de
+# color aunque cambien los datos.
+DESVIACION_MAXIMA = 1.4
+
+
+def _rgba(hexa: str, alfa: float) -> str:
+    """'#E01745' -> 'rgba(224,23,69,0.55)'."""
+    r, g, b = (int(hexa[i:i + 2], 16) for i in (1, 3, 5))
+    return f"rgba({r},{g},{b},{alfa})"
+
+
+def _parte_etiqueta(texto: str, ancho: int = 32) -> str:
+    """Parte una etiqueta larga en dos lineas por el hueco entre palabras.
+
+    Plotly no ajusta los rotulos del eje: reserva sitio para el mas largo y,
+    si no le cabe, lo recorta por la izquierda sin avisar. "% ocupados en
+    agricultura, ganaderia y pesca" perdia el simbolo de porcentaje en la
+    columna estrecha de la ficha de grupo.
+    """
+    if len(texto) <= ancho:
+        return texto
+    corte = texto.rfind(" ", 0, ancho + 1)
+    if corte == -1:
+        return texto
+    return texto[:corte] + "<br>" + texto[corte + 1:]
+
+
+def _tinta_sobre(hexa: str) -> str:
+    """Blanco o casi negro, el que se lea encima de ese color.
+
+    Hace falta desde que la paleta incluye un gris claro y un verde claro: un
+    "6" blanco sobre #CFCFC9 no se ve. Se decide por luminancia relativa con
+    el umbral de la WCAG, no a ojo.
+    """
+    canales = []
+    for i in (1, 3, 5):
+        c = int(hexa[i:i + 2], 16) / 255
+        canales.append(c / 12.92 if c <= 0.04045
+                       else ((c + 0.055) / 1.055) ** 2.4)
+    lum = 0.2126 * canales[0] + 0.7152 * canales[1] + 0.0722 * canales[2]
+    return "#14140f" if lum > 0.36 else "#ffffff"
+
+
+def _fmt_variable(clave: str, valor: float) -> str:
+    """Cada variable con los decimales que le corresponden.
+
+    La renta va en euros y con decimales sería ilegible; el índice de
+    fecundidad se mueve entre 0,6 y 1,2 y con uno solo se perdería el matiz.
+    El resto son porcentajes y les basta un decimal.
+    """
+    if clave == "renta_bruta_persona":
+        return fmt_int(valor)
+    if clave == "indice_fecundidad":
+        return fmt_dec(valor, 2)
+    return fmt_dec(valor, 1)
+
+
+def _provincias_de(ref: pd.DataFrame) -> dict[str, str]:
+    """Código de provincia de dos dígitos -> nombre.
+
+    Sale de las filas de referencia que ya carga la ficha municipal, así que
+    no abre ningún fichero nuevo.
+    """
+    prov = ref[ref["cod"].notna()].drop_duplicates("cod")
+    return dict(zip(prov["cod"], prov["nombre"]))
+
+
+@st.cache_data(show_spinner=False)
+def cargar_clustering(firma: tuple[float, float]) -> tuple[pd.DataFrame,
+                                                           pd.Series, dict]:
+    """Variables, etiqueta de grupo y ficha del agrupamiento.
+
+    `firma` son las fechas de modificación de los ficheros: no se usa dentro,
+    está para que la caché se invalide sola si se vuelve a ejecutar
+    clustering.py sin reiniciar el servidor.
+    """
+    variables = pd.read_parquet(CLUSTER_VARIABLES)
+    grupos = pd.read_parquet(CLUSTER_GRUPOS)["grupo"]
+    ficha = json.loads(CLUSTER_META.read_text(encoding="utf-8"))
+
+    # Los dos ficheros salen de la misma ejecución, pero si alguien regenera
+    # uno solo dejarían de cuadrar. Vale más quedarse con la intersección que
+    # pintar un mapa con las etiquetas desplazadas.
+    if not variables.index.equals(grupos.index):
+        comunes = variables.index.intersection(grupos.index)
+        variables, grupos = variables.loc[comunes], grupos.loc[comunes]
+    return variables, grupos, ficha
+
+
+@st.cache_data(show_spinner=False)
+def perfiles_de_grupo(firma: tuple[float, float]) -> tuple[pd.DataFrame,
+                                                           pd.DataFrame]:
+    """Media de cada variable por grupo, en unidades originales y en z.
+
+    Las dos hacen falta y no dicen lo mismo: las unidades originales dicen
+    cómo es el grupo, y las z en qué se distingue del resto. Un grupo puede
+    tener un 20 % de paro -alto en absoluto- y estar en la media si todos lo
+    tienen.
+
+    La estandarización es la misma que la de clustering.py: z de columna con
+    desviación muestral (ddof=1, la de pandas por defecto).
+    """
+    variables, grupos, ficha = cargar_clustering(firma)
+    claves = [v["clave"] for v in ficha["variables"]]
+    datos = variables[claves]
+
+    tipificadas = datos.sub(datos.mean()).div(datos.std())
+    return datos.groupby(grupos).mean().T, tipificadas.groupby(grupos).mean().T
+
+
+def banda_reparto(tamanos: pd.Series, nombres: dict[int, str]) -> go.Figure:
+    """Una barra apilada con el peso de cada grupo.
+
+    Es la primera imagen de la pantalla y responde a una sola pregunta: si
+    algún grupo es residual. No lo es, y por eso conviene verlo antes que
+    ninguna otra cifra.
+    """
+    total = int(tamanos.sum())
+    fig = go.Figure()
+    for g, n in tamanos.items():
+        fig.add_trace(go.Bar(
+            x=[int(n)], y=[""], orientation="h",
+            marker=dict(
+                color=COLORES_CLUSTER[g - 1],
+                # Un pelo del color de la superficie entre tramos: separa los
+                # bloques sin dibujar una línea que compita con ellos.
+                line=dict(width=2, color=C["surface"]),
+            ),
+            text=[str(g)], textposition="inside", insidetextanchor="middle",
+            textfont=dict(size=13,
+                          color=_tinta_sobre(COLORES_CLUSTER[g - 1])),
+            hovertemplate=(f"<b>{g} · {nombres[g]}</b><br>"
+                           f"{fmt_int(n)} municipios · "
+                           f"{fmt_dec(100 * n / total, 1)} %<extra></extra>"),
+            showlegend=False,
+        ))
+    fig.update_layout(
+        barmode="stack", height=88,
+        margin=dict(l=0, r=0, t=4, b=4),
+        # Sin rango explicito Plotly deja aire a la derecha y la banda no
+        # llega al borde de la tarjeta, que es justo lo que la hace legible
+        # como reparto del 100 %.
+        xaxis=dict(visible=False, fixedrange=True, range=[0, total]),
+        yaxis=dict(visible=False, fixedrange=True),
+        bargap=0,
+    )
+    return fig
+
+
+def barras_desviacion(grupo: int, medias: pd.DataFrame, zetas: pd.DataFrame,
+                      descripciones: dict[str, str],
+                      umbral: float) -> go.Figure:
+    """En qué se aparta el grupo de la media municipal, en desviaciones.
+
+    Solo las variables que superan el umbral: por debajo de media desviación
+    la diferencia no se nota en los datos originales y llenaría el gráfico de
+    ruido. Las que suben van primero y las que bajan después, cada bloque
+    ordenado por tamaño del apartamiento, que es como se lee el perfil.
+    """
+    z = zetas[grupo]
+    fuertes = z[z.abs() >= umbral]
+    arriba = fuertes[fuertes > 0].sort_values(ascending=False)
+    abajo = fuertes[fuertes < 0].sort_values()
+    orden = list(arriba.index) + list(abajo.index)
+
+    color = COLORES_CLUSTER[grupo - 1]
+    # El eje Y de una barra horizontal se pinta de abajo arriba, así que se
+    # invierte el orden para poder leerlo de arriba abajo.
+    alreves = list(reversed(orden))
+    fig = go.Figure(go.Bar(
+        x=[z[v] for v in alreves],
+        y=[_parte_etiqueta(descripciones[v]) for v in alreves],
+        orientation="h",
+        # Las que bajan van al 55 % de opacidad: es el mismo color del grupo,
+        # pero así el bloque que sube pesa más y el perfil se lee de un golpe.
+        marker=dict(color=[color if z[v] > 0 else _rgba(color, 0.55)
+                           for v in alreves]),
+        text=[_fmt_variable(v, medias.loc[v, grupo]) for v in alreves],
+        textposition="outside",
+        textfont=dict(size=12, color=C["ink"]),
+        cliponaxis=False,
+        hovertemplate="%{y}<br>%{x:+.2f} desviaciones<extra></extra>",
+    ))
+    tope = max(1.0, float(fuertes.abs().max()) if len(fuertes) else 1.0) * 1.55
+    fig.update_layout(
+        height=64 + 38 * max(len(orden), 1),
+        margin=dict(l=0, r=8, t=8, b=34),
+        xaxis=dict(range=[-tope, tope], zeroline=True,
+                   zerolinecolor=C["axis"], zerolinewidth=1, fixedrange=True,
+                   title=dict(text="desviaciones típicas sobre la media "
+                                   "municipal")),
+        yaxis=dict(automargin=True, fixedrange=True, showgrid=False),
+        bargap=0.34,
+    )
+    return fig
+
+
+def barras_provincias(cuenta: pd.Series, total_prov: pd.Series,
+                      nombres_prov: dict[str, str], grupo: int,
+                      cuantas: int) -> go.Figure:
+    """Las provincias que más municipios aportan al grupo.
+
+    Se etiqueta también qué parte de la provincia se lleva el grupo, que es
+    otra cosa: Badajoz aporta 147 municipios al grupo 5 y además es el 90 % de
+    Badajoz, mientras que Barcelona aporta 199 al grupo 1 pero eso son solo
+    dos tercios de la provincia.
+    """
+    top = cuenta.head(cuantas)
+    cuota = [100 * top[c] / int(total_prov[c]) for c in top.index]
+    etiquetas = [nombres_prov.get(c, c) for c in top.index]
+
+    valores = list(reversed(top.tolist()))
+    fig = go.Figure(go.Bar(
+        x=valores,
+        y=list(reversed(etiquetas)),
+        orientation="h",
+        marker=dict(color=COLORES_CLUSTER[grupo - 1]),
+        text=[f"{int(n)}   {fmt_dec(q, 0)} % de la prov."
+              for n, q in zip(valores, reversed(cuota))],
+        textposition="outside",
+        textfont=dict(size=12, color=C["ink"]),
+        cliponaxis=False,
+        hovertemplate="%{y}<br>%{x} municipios del grupo<extra></extra>",
+    ))
+    fig.update_layout(
+        height=64 + 34 * max(len(top), 1),
+        margin=dict(l=0, r=8, t=8, b=34),
+        xaxis=dict(range=[0, max(valores) * 1.75], fixedrange=True,
+                   title=dict(text="municipios del grupo en esa provincia")),
+        yaxis=dict(automargin=True, fixedrange=True, showgrid=False),
+        bargap=0.34,
+    )
+    return fig
+
+
+def matriz_variables(medias: pd.DataFrame, zetas: pd.DataFrame,
+                     variables: list[dict], excluida: str,
+                     media_general: pd.Series) -> go.Figure:
+    """Las diecinueve variables contra los siete grupos, de un vistazo.
+
+    El número es la media en unidades originales y el fondo dice cuánto se
+    aparta de la media municipal, para poder leer las dos cosas a la vez: si
+    solo estuvieran los números haría falta comparar mentalmente cada fila con
+    su última columna, que es justo el trabajo que hace el color.
+    """
+    claves = [v["clave"] for v in variables]
+    descripciones = [v["descripcion"] for v in variables]
+    filas = [_parte_etiqueta(d + ("  ·  excluida del cálculo"
+                                  if k == excluida else ""), 38)
+             for k, d in zip(claves, descripciones)]
+    grupos = list(medias.columns)
+
+    # Última columna: la media de todos los municipios. Va sin tinte -z nulo-
+    # porque es la referencia contra la que se tintan las demás, no un valor
+    # que se aparte de nada.
+    z = [[float(zetas.loc[k, g]) for g in grupos] + [None] for k in claves]
+    texto = [[_fmt_variable(k, medias.loc[k, g]) for g in grupos]
+             + [_fmt_variable(k, media_general[k])] for k in claves]
+    globo = [
+        [f"<b>{d}</b><br>Grupo {g}: {t}<br>{zetas.loc[k, g]:+.2f} desviaciones"
+         for g, t in zip(grupos, fila[:-1])]
+        + [f"<b>{d}</b><br>Media municipal: {fila[-1]}"]
+        for k, d, fila in zip(claves, descripciones, texto)
+    ]
+
+    fig = go.Figure(go.Heatmap(
+        z=z, text=texto, hovertext=globo,
+        x=[f"g{g}" for g in grupos] + ["MEDIA"],
+        y=filas,
+        colorscale=ESCALA_DESVIACION,
+        zmid=0, zmin=-DESVIACION_MAXIMA, zmax=DESVIACION_MAXIMA,
+        showscale=False,
+        # Un pelo de la superficie entre celdas: la cuadrícula sale del hueco
+        # y no de una línea dibujada encima.
+        xgap=2, ygap=2,
+        texttemplate="%{text}",
+        textfont=dict(size=12, color=C["ink"]),
+        hovertemplate="%{hovertext}<extra></extra>",
+    ))
+    fig.update_layout(
+        height=104 + 35 * len(filas),
+        margin=dict(l=0, r=8, t=44, b=8),
+        xaxis=dict(side="top", fixedrange=True, showgrid=False,
+                   tickfont=dict(size=13, color=C["ink"])),
+        # Las filas se listan en el orden de la tabla de variables, que agrupa
+        # por bloques temáticos; sin invertir saldrían del revés.
+        yaxis=dict(autorange="reversed", automargin=True, fixedrange=True,
+                   showgrid=False, tickfont=dict(size=12)),
+    )
+    return fig
+
+
+def pantalla_clustering(ref: pd.DataFrame) -> None:
+    if not (CLUSTER_VARIABLES.exists() and CLUSTER_GRUPOS.exists()
+            and CLUSTER_META.exists()):
+        st.info(
+            "Faltan las etiquetas del agrupamiento. Genéralas una vez con "
+            "`py -3.10 clustering.py`: esta pantalla no corta el árbol, solo "
+            "lee lo que aquel script deja en `data_cache/`.",
+            icon="🧭",
+        )
+        return
+
+    firma = (CLUSTER_GRUPOS.stat().st_mtime, CLUSTER_META.stat().st_mtime)
+    variables, grupos, ficha = cargar_clustering(firma)
+    medias, zetas = perfiles_de_grupo(firma)
+
+    nombres = {int(k): v for k, v in ficha["nombres"].items()}
+    descripciones = {v["clave"]: v["descripcion"] for v in ficha["variables"]}
+    claves = [v["clave"] for v in ficha["variables"]]
+    tamanos = grupos.value_counts().sort_index()
+    total = int(len(grupos))
+    # La provincia son los dos primeros dígitos del código INE. No entró en el
+    # agrupamiento: se usa solo para situar los grupos en el mapa mental.
+    prov_de_muni = pd.Series(grupos.index.str[:2], index=grupos.index)
+    nombres_prov = _provincias_de(ref)
+
+    # --- cabecera ---------------------------------------------------------
+    st.markdown('<p class="dash-eyebrow">Tipología municipal · Censo INE · '
+                'Agrupación de Ward</p>', unsafe_allow_html=True)
+    st.markdown('<h1 class="dash-title">Siete Españas municipales</h1>',
+                unsafe_allow_html=True)
+    st.markdown(f'<p class="dash-sub">{ENTRADILLA_CLUSTER}</p>',
+                unsafe_allow_html=True)
+    st.markdown('<hr class="dash-rule">', unsafe_allow_html=True)
+
+    usadas = len(claves) - 1
+    ficha_kpis = [
+        ("Municipios", fmt_int(total),
+         f"Los que tienen las {len(claves)} variables. Quedan fuera "
+         f"{fmt_int(ficha['descartados'])} municipios a los que el INE no "
+         f"publica algún dato, casi todos los más pequeños."),
+        ("Variables", str(usadas),
+         f"{usadas} de {len(claves)} entran en el cálculo de distancias: la "
+         f"{descripciones[ficha['variable_excluida']].lower()} se calcula "
+         f"pero se excluye."),
+        ("Grupos", str(ficha["grupos"]),
+         "Corte del árbol jerárquico en siete ramas."),
+        ("Método", ficha["metodo"],
+         "En cada paso une los dos grupos que menos aumentan la varianza "
+         "interna."),
+        ("Distancia", ficha["distancia"].capitalize(),
+         "Sobre las variables estandarizadas, para que la renta no decida "
+         "ella sola por tener los números más grandes."),
+    ]
+    for col, (etiqueta, valor, ayuda) in zip(
+            st.columns(5, gap="small"), ficha_kpis):
+        col.metric(etiqueta, valor, help=ayuda, border=True)
+
+    # --- reparto ----------------------------------------------------------
+    st.write("")
+    with st.container(border=True):
+        cabecera_grafico(
+            "Cómo se reparten",
+            "Ancho proporcional al número de municipios. Ningún grupo es "
+            f"residual: el más pequeño reúne {fmt_int(tamanos.min())} "
+            f"municipios y el mayor, {fmt_int(tamanos.max())}.",
+        )
+        st.plotly_chart(banda_reparto(tamanos, nombres), width="stretch",
+                        config={"displayModeBar": False})
+        # Leyenda escrita debajo de la banda: los siete números de dentro de
+        # los tramos no dicen de qué grupo se trata, y el color tampoco debe
+        # ser lo único que lo diga.
+        chips = "".join(
+            '<span style="display:inline-flex;align-items:center;gap:8px;'
+            'font-size:13px;color:' + C["ink_2"] + '">'
+            '<i style="width:13px;height:13px;border-radius:2px;flex:none;'
+            'background:' + COLORES_CLUSTER[g - 1] + '"></i>'
+            + f"{g} · {nombres[g]} "
+            + '<b style="font-weight:400;color:' + C["ink_muted"] + '">'
+            + fmt_int(tamanos[g]) + "</b></span>"
+            for g in tamanos.index
+        )
+        st.markdown(
+            '<div style="display:flex;flex-wrap:wrap;gap:8px 26px;'
+            'margin:12px 0 2px">' + chips + "</div>",
+            unsafe_allow_html=True,
+        )
+
+    # --- selector de grupo ------------------------------------------------
+    # Va antes del mapa porque manda sobre los dos: elige la ficha de abajo y,
+    # si se marca la casilla, el grupo que queda encendido en el mapa.
+    st.write("")
+    c_sel, c_aislar = st.columns([3, 2], gap="medium")
+    with c_sel:
+        st.markdown('<p class="card-sub">Grupo</p>', unsafe_allow_html=True)
+        grupo = st.segmented_control(
+            "Grupo", options=[int(g) for g in tamanos.index],
+            format_func=lambda g: str(g), default=int(tamanos.index[0]),
+            key="cluster_grupo", label_visibility="collapsed",
+        ) or int(tamanos.index[0])
+    with c_aislar:
+        st.markdown('<p class="card-sub">Mapa</p>', unsafe_allow_html=True)
+        aislar = st.checkbox(
+            f"Aislar el grupo {grupo}", value=False, key="cluster_aislar",
+            help="Apaga los otros seis. Hace falta de verdad: el grupo 3 son "
+                 "solo 482 municipios y a simple vista se pierde entre los "
+                 "demás.",
+        )
+
+    # --- mapa -------------------------------------------------------------
+    if not (GEOJSON_PENINBAL.exists() and GEOJSON_CANARIAS.exists()):
+        st.info(
+            "Faltan las geometrías simplificadas. Genéralas una vez con "
+            "`py -3.10 preprocessGrids.py`.",
+            icon="🧩",
+        )
+    else:
+        colores_mapa = [
+            c if (not aislar or g == grupo) else COLOR_GRUPO_APAGADO
+            for g, c in zip(tamanos.index, COLORES_CLUSTER)
+        ]
+        texto = pd.Series(
+            [f"<b>{n} ({c})</b><br>Grupo {g} · {nombres[g]}"
+             for c, n, g in zip(variables.index, variables["nombre"], grupos)],
+            index=variables.index,
+        )
+        with st.container(border=True):
+            cabecera_grafico(
+                "Los siete grupos sobre el mapa",
+                "Cada municipio pintado según su grupo. Ni la provincia ni "
+                "las coordenadas entraron en el cálculo: este mapa es el "
+                "resultado de agrupar por parecido demográfico y nada más. En "
+                f"gris, los {fmt_int(ficha['descartados'])} municipios sin "
+                "dato en alguna variable.",
+            )
+            st.plotly_chart(
+                mapa_nacional(
+                    grupos - 1,
+                    [f"{g} · {nombres[g]}" for g in tamanos.index],
+                    colores_mapa, texto, "Grupo",
+                ),
+                width="stretch",
+                config={"displayModeBar": False, "scrollZoom": True},
+            )
+
+    # --- ficha del grupo --------------------------------------------------
+    st.write("")
+    color = COLORES_CLUSTER[grupo - 1]
+    cuenta = prov_de_muni[grupos == grupo].value_counts()
+    total_prov = prov_de_muni.value_counts()
+
+    with st.container(border=True):
+        st.markdown(
+            '<div style="display:flex;gap:14px;align-items:center">'
+            '<span style="display:grid;place-items:center;width:38px;'
+            "height:38px;border-radius:3px;flex:none;color:"
+            + _tinta_sobre(color) + ";"
+            "font:600 17px/1 " + FONT_STACK + ";background:" + color + '">'
+            + str(grupo) + "</span>"
+            '<span class="card-title" style="font-size:21px">'
+            + nombres[grupo] + "</span></div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            f"{fmt_int(tamanos[grupo])} municipios · "
+            f"{fmt_dec(100 * tamanos[grupo] / total, 1)} % del total · "
+            f"presente en {len(cuenta)} de las {len(total_prov)} provincias"
+        )
+        st.markdown(LECTURA_GRUPO[grupo])
+        st.write("")
+
+        c_dev, c_prov = st.columns([1.5, 1], gap="large")
+        with c_dev:
+            cabecera_grafico(
+                "En qué se aparta de la media",
+                "A la derecha del eje, por encima de la media municipal; a la "
+                "izquierda, por debajo. La cifra al final de cada barra es el "
+                "valor en unidades originales. Solo se listan las variables "
+                "que se apartan al menos "
+                f"{fmt_dec(ficha['z_caracteristica'], 1)} desviaciones.",
+            )
+            st.plotly_chart(
+                barras_desviacion(grupo, medias, zetas, descripciones,
+                                  ficha["z_caracteristica"]),
+                width="stretch", config={"displayModeBar": False},
+            )
+        with c_prov:
+            cabecera_grafico(
+                "Dónde está",
+                f"Las {min(ficha['provincias_listadas'], len(cuenta))} "
+                "provincias que más municipios aportan al grupo.",
+            )
+            st.plotly_chart(
+                barras_provincias(cuenta, total_prov, nombres_prov, grupo,
+                                  ficha["provincias_listadas"]),
+                width="stretch", config={"displayModeBar": False},
+            )
+            # Dónde pesa más no es lo mismo que dónde hay más: se exigen 20
+            # municipios para no premiar a una provincia que aporte tres.
+            suficientes = cuenta[cuenta >= 20]
+            if len(suficientes):
+                cuota = suficientes / total_prov.reindex(suficientes.index)
+                st.caption(
+                    "Donde más pesa, sobre el total de cada provincia: "
+                    + " · ".join(
+                        f"**{nombres_prov.get(c, c)}** {fmt_dec(100 * v, 0)} %"
+                        for c, v in cuota.sort_values(
+                            ascending=False).head(3).items())
+                )
+
+    # --- matriz -----------------------------------------------------------
+    st.write("")
+    with st.container(border=True):
+        cabecera_grafico(
+            f"Las {len(claves)} variables, grupo a grupo",
+            "Medias en unidades originales. El fondo tinta cuánto se aparta "
+            "cada valor de la media municipal: rojizo por encima, azulado por "
+            f"debajo. La última columna es la media de los {fmt_int(total)} "
+            "municipios, sin ponderar por población.",
+        )
+        st.plotly_chart(
+            matriz_variables(medias, zetas, ficha["variables"],
+                             ficha["variable_excluida"],
+                             variables[claves].mean()),
+            width="stretch", config={"displayModeBar": False},
+        )
+        st.caption(
+            "Municipios por grupo: "
+            + " · ".join(f"g{g} {fmt_int(tamanos[g])}" for g in tamanos.index)
+        )
+
+    # --- cautelas ---------------------------------------------------------
+    st.write("")
+    cabecera_grafico(f"{len(CAUTELAS_CLUSTER)} cautelas al leer esto")
+    st.write("")
+    for col, (titulo, cuerpo) in zip(
+            st.columns(len(CAUTELAS_CLUSTER), gap="small"), CAUTELAS_CLUSTER):
+        with col.container(border=True, height=320):
+            st.markdown('<p class="card-title" style="font-size:14px">'
+                        + titulo + "</p>", unsafe_allow_html=True)
+            st.caption(cuerpo)
+
+    st.write("")
+    st.caption(
+        FUENTES_CLUSTER + f" Agrupación jerárquica de {ficha['metodo']} sobre "
+        f"{usadas} variables estandarizadas; altura de la última unión, "
+        f"{fmt_dec(ficha['altura_ultima_union'], 1)}. Los "
+        f"{fmt_int(ficha['descartados'])} municipios sin dato en alguna "
+        "variable quedan fuera del análisis."
+    )
+
+
+# ==========================================================================
+# §9  MAIN
 # ==========================================================================
 
 
@@ -2382,6 +3073,13 @@ def main() -> None:
 
     if pantalla == "Mapas":
         pantalla_mapas(muni, renta_serie, renta_ctx, mtime)
+        return
+
+    if pantalla == "Clustering":
+        # Se le pasa `ref` porque de ahi salen los nombres de las provincias,
+        # que ya estan cargados: la pantalla no abre ningun fichero mas que
+        # los tres del propio agrupamiento.
+        pantalla_clustering(ref)
         return
 
     act_muni = cargar_tabla_municipal("relacion_actividad", mtime)

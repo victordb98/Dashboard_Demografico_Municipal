@@ -1,17 +1,34 @@
-streamlit>=1.50
-pandas>=2.2
-plotly>=5.22
-openpyxl>=3.1
-pyarrow>=16.0
+# Versiones fijadas a las que están probadas en local. En el servidor conviene
+# fijarlas y no usar ">=": si no, cada redespliegue instala lo más nuevo que
+# haya ese día y una versión mayor nueva puede romper la app sin tocar nada.
+# Para actualizar algo: subir aquí el número, probar en local y volver a subir.
+streamlit==1.62.0
+pandas==2.3.2
+numpy==2.2.6
+plotly==6.7.0
+pyarrow==25.0.1
+# Solo hace falta si algún data_cache/<hoja>.parquet no estuviera subido y
+# hubiera que releer el Excel.
+openpyxl==3.1.5
+
 # --- mapas ---
 # Las usa preprocessGrids.py para generar data_cache/*.parquet y app.py para
 # leerlos. Sin ellas el dashboard funciona, pero el bloque del mapa avisa.
-geopandas>=1.0
-pyogrio>=0.9
-shapely>=2.0
-pyproj>=3.6
-# --- pantallas siguientes (comarcas y clustering) ---
-# scikit-learn>=1.5
-# libpysal>=4.11
-# esda>=2.6
-# spopt>=0.6
+geopandas==1.1.4
+pyogrio==0.13.0
+shapely==2.1.2
+pyproj==3.7.1
+
+# --- solo en local, NO en el servidor ---
+# clustering.py se ejecuta a mano en el portátil, no lo usa el dashboard, así
+# que estas quedan fuera del despliegue para no alargar la instalación en el
+# servidor. Si se monta el proyecto en otra máquina: pip install scipy
+# scipy==1.15.3        # matriz de disimilitud y enlace jerárquico
+
+# --- pantallas siguientes (comarcas) ---
+# La pantalla Clustering ya esta hecha y no necesita nada de esto: lee las
+# etiquetas que clustering.py deja en data_cache/.
+# scikit-learn==1.5.2
+# libpysal==4.12.1
+# esda==2.6.0
+# spopt==0.6.1

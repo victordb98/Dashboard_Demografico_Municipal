@@ -1,0 +1,98 @@
+{
+  "grupos": 7,
+  "nombres": {
+    "1": "Urbano o cualificados de renta alta",
+    "2": "Rural en despoblación extrema",
+    "3": "Agrario próspero",
+    "4": "Rural agrario envejecido",
+    "5": "Sur agrario de rentas bajas",
+    "6": "Perfil medio con industria",
+    "7": "Urbano de rentas bajas y migración"
+  },
+  "variables": [
+    {
+      "clave": "pct_menores_18",
+      "descripcion": "% población menor de 18 años"
+    },
+    {
+      "clave": "pct_mayores_67",
+      "descripcion": "% población de 67 y más años"
+    },
+    {
+      "clave": "pct_migrantes",
+      "descripcion": "% nacidos en el extranjero"
+    },
+    {
+      "clave": "indice_fecundidad",
+      "descripcion": "Hijos por mujer"
+    },
+    {
+      "clave": "renta_bruta_persona",
+      "descripcion": "Renta bruta media por persona (€)"
+    },
+    {
+      "clave": "pct_solteros",
+      "descripcion": "% solteros"
+    },
+    {
+      "clave": "pct_casados",
+      "descripcion": "% casados"
+    },
+    {
+      "clave": "pct_divorciados",
+      "descripcion": "% divorciados o separados"
+    },
+    {
+      "clave": "pct_cuenta_propia",
+      "descripcion": "% trabajadores por cuenta propia"
+    },
+    {
+      "clave": "pct_agricultura",
+      "descripcion": "% ocupados en agricultura, ganadería y pesca"
+    },
+    {
+      "clave": "pct_secundario",
+      "descripcion": "% ocupados en industria y construcción"
+    },
+    {
+      "clave": "pct_directores",
+      "descripcion": "% directores, gerentes y técnicos"
+    },
+    {
+      "clave": "pct_cualificados",
+      "descripcion": "% trabajadores cualificados y operarios"
+    },
+    {
+      "clave": "pct_primaria_inferior",
+      "descripcion": "% con educación primaria o inferior"
+    },
+    {
+      "clave": "pct_secundaria_2a",
+      "descripcion": "% con segunda etapa de secundaria"
+    },
+    {
+      "clave": "pct_superior",
+      "descripcion": "% con educación superior"
+    },
+    {
+      "clave": "tasa_paro",
+      "descripcion": "Tasa de paro"
+    },
+    {
+      "clave": "tasa_empleo",
+      "descripcion": "Tasa de empleo"
+    },
+    {
+      "clave": "tasa_actividad",
+      "descripcion": "Tasa de actividad"
+    }
+  ],
+  "variable_excluida": "tasa_actividad",
+  "z_caracteristica": 0.5,
+  "provincias_listadas": 6,
+  "municipios": 7502,
+  "descartados": 630,
+  "altura_ultima_union": 187.95537006363904,
+  "metodo": "Ward",
+  "distancia": "euclidea"
+}

@@ -22,3 +22,8 @@ __pycache__/
 .venv/
 venv/
 .DS_Store
+
+# --- Salida regenerable -----------------------------------------------------
+# Dendrograma y grafico del codo: los vuelve a dibujar clustering.py en cada
+# ejecucion y el dashboard no los lee.
+figuras/
